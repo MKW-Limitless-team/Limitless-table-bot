@@ -19,5 +19,4 @@ python app.py
 
 - This app is Limitless-only.
 - Table state is stored locally under the configured state directory as pickle files.
-- `ct_map` is intentionally isolated in `tablebot/constants/ct_map.py` for later replacement.
 - Environment variables still work as fallback, but `config.json` is now the main configuration path.

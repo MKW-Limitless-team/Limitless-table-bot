@@ -5,7 +5,7 @@ import random
 import numpy as np
 import pandas as pd
 
-from tablebot.constants import COLOR_PALETTES, CT_MAP, DISTINCT_COLORS, FFA_COLOR_PALETTES
+from tablebot.constants import COLOR_PALETTES, ct_map, DISTINCT_COLORS, FFA_COLOR_PALETTES
 from tablebot.models import TableState
 from tablebot.rendering.text import get_table_image, text_to_image
 from tablebot.services import edit_service, room_service
@@ -33,7 +33,7 @@ def get_points(position_list: list[int], room_size: int = -1) -> list[int]:
 
 
 def identify_custom_track(track_name: str) -> str:
-    return CT_MAP.get(str(track_name), str(track_name))
+    return ct_map.get(str(track_name), str(track_name))
 
 
 def process_race(all_players: pd.DataFrame, race_df: pd.DataFrame, room_code: str, points_to_off_results_players: int = 0) -> pd.DataFrame:
