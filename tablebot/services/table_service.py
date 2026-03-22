@@ -17,19 +17,23 @@ def get_points(position_list: list[int], room_size: int = -1) -> list[int]:
     if room_size == -1:
         room_size = len(position_list)
     point_table = {
-        2: [15, 7],
-        3: [15, 8, 2],
-        4: [15, 9, 4, 1],
-        5: [15, 9, 5, 2, 1],
-        6: [15, 10, 6, 3, 1, 0],
-        7: [15, 10, 7, 5, 3, 1, 0],
-        8: [15, 11, 8, 6, 4, 2, 1, 0],
-        9: [15, 11, 8, 6, 4, 3, 2, 1, 0],
-        10: [15, 12, 10, 8, 6, 4, 3, 2, 1, 0],
-        11: [15, 12, 10, 8, 6, 5, 4, 3, 2, 1, 0],
-        12: [15, 12, 10, 8, 7, 6, 5, 4, 3, 2, 1, 0],
+        1: [15],
+        2: [15, 13],
+        3: [15, 13, 11],
+        4: [15, 13, 11, 9],
+        5: [15, 13, 11, 9, 8],
+        6: [15, 13, 11, 9, 8, 7],
+        7: [15, 13, 11, 9, 8, 7, 6],
+        8: [15, 13, 11, 9, 8, 7, 6, 5],
+        9: [15, 13, 11, 9, 8, 7, 6, 5, 4],
+        10: [15, 13, 11, 9, 8, 7, 6, 5, 4, 3],
+        11: [15, 13, 11, 9, 8, 7, 6, 5, 4, 3, 2],
+        12: [15, 13, 11, 9, 8, 7, 6, 5, 4, 3, 2, 1],
     }
-    return [point_table[room_size][pos - 1] if pos and 1 <= pos <= room_size else 0 for pos in position_list]
+    points_for_room = point_table.get(room_size)
+    if points_for_room is None:
+        raise ValueError(f"Unsupported room size: {room_size}")
+    return [points_for_room[pos - 1] if pos and 1 <= pos <= room_size else 0 for pos in position_list]
 
 
 def identify_custom_track(track_name: str) -> str:
