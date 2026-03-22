@@ -436,4 +436,4 @@ def register_commands(bot: discord.Client, tree: app_commands.CommandTree) -> No
         if isinstance(original_error, FileNotFoundError):
             await _send_interaction_message(interaction, str(original_error))
             return
-        raise error
+        await _send_interaction_message(interaction, f"Error: {original_error}")
