@@ -1,0 +1,1 @@
+"""Limitless table bot package."""

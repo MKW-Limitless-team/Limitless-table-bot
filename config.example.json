@@ -1,0 +1,6 @@
+{
+  "token": "replace-with-your-discord-bot-token",
+  "base_url": "http://wfc.blazico.nl",
+  "state_dir": "./state",
+  "data_dir": "."
+}
