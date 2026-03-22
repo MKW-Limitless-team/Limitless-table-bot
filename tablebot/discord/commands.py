@@ -7,6 +7,7 @@ from discord import app_commands
 
 from tablebot.config import BASE_URL
 from tablebot.constants import HELP_MAP, HELP_MESSAGE
+from tablebot.discord.views import RefreshVerifyRoom, RefreshWP
 from tablebot.rendering.text import image_to_file
 from tablebot.services import edit_service, table_service
 from tablebot.storage.state_store import state_exists
@@ -15,7 +16,7 @@ from tablebot.utils.formatting import parse_possible_mention
 
 def _require_state(server_id: str, channel_id: str):
     if not state_exists(server_id, channel_id):
-        raise FileNotFoundError("No table started in this channel.")
+        raise FileNotFoundError("No Table started in this channel, or table is midway through an update.")
     return table_service.load_table_state(server_id, channel_id)
 
 
@@ -35,11 +36,12 @@ def register_commands(bot: discord.Client, tree: app_commands.CommandTree) -> No
         if not success:
             await interaction.edit_original_response(content=f"Error: {vr_text}")
             return
+        vr_view = RefreshVerifyRoom(player, image == "True")
         if image == "True":
             buffer, filename = image_to_file(vr_image, "verify_room.png")
-            await interaction.edit_original_response(content=None, attachments=[discord.File(buffer, filename=filename)])
+            await interaction.edit_original_response(content=None, attachments=[discord.File(buffer, filename=filename)], view=vr_view)
         else:
-            await interaction.edit_original_response(content=vr_text)
+            await interaction.edit_original_response(content=vr_text, view=vr_view)
 
     @tree.command(name="sw", description="Start new War/Table")
     async def sw(
@@ -72,7 +74,7 @@ def register_commands(bot: discord.Client, tree: app_commands.CommandTree) -> No
         if red_flags:
             lines.append("")
             lines.extend(red_flags)
-        await interaction.edit_original_response(content="\n".join(lines), attachments=[discord.File(buffer, filename=filename)])
+        await interaction.edit_original_response(content="\n".join(lines), attachments=[discord.File(buffer, filename=filename)], view=RefreshWP(False))
 
     @tree.command(name="mergeroom", description="Merge existing table with new room")
     async def mergeroom(interaction: discord.Interaction, lookup: str | None = None, rxx: str | None = None):
@@ -88,22 +90,38 @@ def register_commands(bot: discord.Client, tree: app_commands.CommandTree) -> No
     @tree.command(name="wp", description="Display updated War/Table Picture")
     async def wp(interaction: discord.Interaction, by_race: Literal["True", "False"] = "False", distinct_color_table: Literal["True", "False"] = "False"):
         await interaction.response.defer()
-        state = _require_state(str(interaction.guild.id), str(interaction.channel.id))
+        server_id = str(interaction.guild.id)
+        channel_id = str(interaction.channel.id)
+        state = _require_state(server_id, channel_id)
+        refresh_success, refresh_result = table_service.refresh_table_state(server_id, channel_id, state)
+        if not refresh_success:
+            await interaction.edit_original_response(content=f"Error: {refresh_result}")
+            return
         success, table_image, update_text, red_flags, _, edit_link = table_service.render_table(state, by_race == "True", distinct_color_table == "True")
         if not success:
             await interaction.edit_original_response(content=f"Error: {table_image}")
             return
         buffer, filename = image_to_file(table_image, "war_picture.png")
         lines = [update_text]
-        if red_flags:
-            lines.extend(red_flags)
-        await interaction.edit_original_response(content="\n".join(lines), attachments=[discord.File(buffer, filename=filename)])
+        combined_red_flags = list(refresh_result) if isinstance(refresh_result, list) else []
+        combined_red_flags.extend(red_flags)
+        if combined_red_flags:
+            lines.extend(combined_red_flags)
+        await interaction.edit_original_response(content="\n".join(lines), attachments=[discord.File(buffer, filename=filename)], view=RefreshWP(by_race == "True", distinct_color_table == "True"))
 
     @tree.command(name="tt", description="Get Lorenzi Table Text")
     async def tt(interaction: discord.Interaction, by_race: Literal["True", "False"] = "False"):
         await interaction.response.defer()
         state = _require_state(str(interaction.guild.id), str(interaction.channel.id))
-        await interaction.edit_original_response(content=table_service.get_tabletext(state, by_race == "True"))
+        tabletext = table_service.get_tabletext(state, by_race == "True").replace("Penalty 0", "")
+        lines = [line for line in tabletext.splitlines()]
+        out_lines: list[str] = []
+        for index, line in enumerate(lines):
+            if index > 0 and "#" in line and line.strip() and line == line.strip() and not lines[index - 1].strip() == "":
+                out_lines.append("")
+            if line != " ":
+                out_lines.append(line)
+        await interaction.edit_original_response(content="\n".join(out_lines))
 
     @tree.command(name="ap", description="List All Players who have been in room")
     async def ap(interaction: discord.Interaction):
@@ -142,7 +160,7 @@ def register_commands(bot: discord.Client, tree: app_commands.CommandTree) -> No
         num_rooms = int(state.metadata["num_rooms"].iloc[0])
         room_codes = [str(state.metadata[f"room_{index}_id"].iloc[0]) for index in range(1, num_rooms + 1)]
         urls = [f"{BASE_URL}/api/mkw_rr?id={room_code}" for room_code in room_codes]
-        await interaction.edit_original_response(content="Room codes:\n" + "\n".join(room_codes) + "\n\nRoom URLs:\n" + "\n".join(urls))
+        await interaction.edit_original_response(content=f"Number of rooms on table: {num_rooms}\n\nRoom codes:\n" + "\n".join(room_codes) + "\n\nRoom URLs:\n" + "\n".join(urls))
 
     @tree.command(name="help", description="Get help with bot commands")
     async def help_cmd(interaction: discord.Interaction, command: str | None = None):
@@ -162,10 +180,22 @@ def register_commands(bot: discord.Client, tree: app_commands.CommandTree) -> No
                 return
             if command_id > int(filtered.iloc[-1]["command_id"]):
                 command_id = int(filtered.iloc[-1]["command_id"])
+            if command_id < int(filtered.iloc[0]["command_id"]):
+                command_id = int(filtered.iloc[0]["command_id"])
+            row = state.commands[state.commands["command_id"] == command_id]
+            if len(row) < 1:
+                await interaction.edit_original_response(content=f'Invalid command_id "{command_id}"')
+                return
+            already_value = bool(row.iloc[0]["undo"]) is undo_value
+            if already_value:
+                status_word = "undone" if undo_value else "redone"
+                await interaction.edit_original_response(content=f"Command {command_id} has already been {status_word}:\n{row.iloc[0]['command_description']}")
+                return
             state.commands.loc[state.commands["command_id"] == command_id, "undo"] = undo_value
             _, error_log = table_service.apply_commands_and_save(server_id, channel_id, state)
             suffix = f"\nErrors:\n" + "\n".join(error_log) if error_log else ""
-            await interaction.edit_original_response(content=f"Successfully updated command {command_id}.{suffix}")
+            status_word = "undone" if undo_value else "redone"
+            await interaction.edit_original_response(content=f"Successfully marked command {command_id} as {status_word}:\n{row.iloc[0]['command_description']}{suffix}")
 
     _register_simple_toggle_command("undo", "Undo a table edit command", True)
     _register_simple_toggle_command("redo", "Redo a table edit command", False)
@@ -321,9 +351,17 @@ def register_commands(bot: discord.Client, tree: app_commands.CommandTree) -> No
         if not success_race:
             await interaction.edit_original_response(content=str(match_id))
             return
+        race_df = state.processed_races_dfs[race - 1]
+        num_players_in_race = len(race_df[race_df["placement"] > 0])
+        allowed_max_pos = min(num_players_in_race + 1, 12)
+        if position == 0 or position > allowed_max_pos:
+            await interaction.edit_original_response(
+                content=f'Invalid position "{position}" provided. Room size in race {race} is {num_players_in_race}, so new position must be between 1 and {allowed_max_pos}, or negative if DC not on results.'
+            )
+            return
         state.commands = edit_service.append_command(state.commands, "changeplace", f"cp {player_id} {match_id}({race}) {position}", player_id, match_id, position)
         table_service.apply_commands_and_save(server_id, channel_id, state)
-        await interaction.edit_original_response(content=f"Successfully changed place for player {player_id} on race {race}.")
+        await interaction.edit_original_response(content=f"Successfully changed place for player {player_id} on race {race} to position {position}")
 
     @tree.command(name="edit", description="Change a player's score for a GP")
     async def edit(interaction: discord.Interaction, player: str, gp: int, score: int):
@@ -335,6 +373,12 @@ def register_commands(bot: discord.Client, tree: app_commands.CommandTree) -> No
         if not success_player:
             await interaction.edit_original_response(content=str(player_id))
             return
+        if score < 0 or score > 60:
+            await interaction.edit_original_response(content=f'Invalid score "{score}" entered. Score must be between 0 and 60 for a GP.')
+            return
+        if len(state.processed_races_dfs) < ((gp - 1) * 4 + 1) or gp < 1:
+            await interaction.edit_original_response(content=f'Invalid GP number "{gp}". I see {len(state.processed_races_dfs)} races on the table.')
+            return
         state.commands = edit_service.append_command(state.commands, "edit", f"edit {player_id} {gp} {score}", player_id, gp, score)
         table_service.apply_commands_and_save(server_id, channel_id, state)
         await interaction.edit_original_response(content=f"Successfully edited player {player_id}'s GP {gp} to {score}.")
@@ -345,9 +389,26 @@ def register_commands(bot: discord.Client, tree: app_commands.CommandTree) -> No
         server_id = str(interaction.guild.id)
         channel_id = str(interaction.channel.id)
         state = _require_state(server_id, channel_id)
+        if len(state.processed_races_dfs) < ((gp - 1) * 4 + 1) or gp < 1:
+            await interaction.edit_original_response(content=f'Invalid GP number "{gp}". I see {len(state.processed_races_dfs)} races on the table.')
+            return
+        scores_list = [score.lstrip() for score in scores.split(",")]
+        if len(scores_list) != len(state.all_players["friend_code"].tolist()):
+            await interaction.edit_original_response(content=f"Number of scores provided ({len(scores_list)}) does not match the number of players in the room ({len(state.all_players['friend_code'].tolist())}) (give scores in order of /allplayers separated by commas).")
+            return
+        for score_piece in scores_list:
+            try:
+                parsed_score = int(score_piece)
+            except ValueError:
+                await interaction.edit_original_response(content=f'Invalid score "{score_piece}" is not an integer.')
+                return
+            if parsed_score < 0 or parsed_score > 60:
+                await interaction.edit_original_response(content=f'Invalid score "{score_piece}" entered. Score must be between 0 and 60 for a GP.')
+                return
+        scores = ", ".join(scores_list)
         state.commands = edit_service.append_command(state.commands, "gpedit", f"gpedit {gp} {scores}", gp, scores)
         table_service.apply_commands_and_save(server_id, channel_id, state)
-        await interaction.edit_original_response(content=f"Successfully edited GP {gp}.")
+        await interaction.edit_original_response(content=f"Successfully edited all player's scores in GP {gp} to: {scores}")
 
     @tree.command(name="changename", description="Change a player's display name on the table")
     async def changename(interaction: discord.Interaction, player: str, new_name: str):
@@ -359,9 +420,15 @@ def register_commands(bot: discord.Client, tree: app_commands.CommandTree) -> No
         if not success_player:
             await interaction.edit_original_response(content=str(player_id))
             return
+        if len(new_name.strip()) < 1:
+            await interaction.edit_original_response(content="Cannot change a player's name to empty space.")
+            return
+        if len(new_name.strip()) > 48:
+            await interaction.edit_original_response(content="Why are you trying to change a player's name to something that long?")
+            return
         state.commands = edit_service.append_command(state.commands, "changename", f"changename {player_id} {new_name}", player_id, new_name)
         table_service.apply_commands_and_save(server_id, channel_id, state)
-        await interaction.edit_original_response(content=f"Successfully changed player {player_id}'s name to {new_name}.")
+        await interaction.edit_original_response(content=f"Successfully changed player {player_id}'s name to: {new_name}")
 
     @tree.error
     async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):

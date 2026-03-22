@@ -136,6 +136,109 @@ def _create_all_players(races_dfs: list[pd.DataFrame], fmt: int, num_teams: int,
     return all_players
 
 
+def _points_to_off_results(fmt: int) -> int:
+    return 3 if fmt == 5 else 0
+
+
+def _room_codes(state: TableState) -> list[str]:
+    return [str(state.metadata[f"room_{index}_id"].iloc[0]) for index in range(1, int(state.metadata["num_rooms"].iloc[0]) + 1)]
+
+
+def _assign_missing_team_colors(all_players_raw: pd.DataFrame, fmt: int, color_theme: str) -> pd.DataFrame:
+    all_players_raw = all_players_raw.copy()
+    palette = COLOR_PALETTES.get(color_theme, COLOR_PALETTES["pastel"])
+
+    if fmt == 1:
+        all_players_raw["tag_guess"] = all_players_raw["tag_guess"].fillna("FFA")
+        unknown_mask = all_players_raw["tag_guess"].str.upper() == "FFA"
+    else:
+        all_players_raw["tag_guess"] = all_players_raw["tag_guess"].fillna("Unknown Tag")
+        unknown_mask = all_players_raw["tag_guess"].str.upper() == "UNKNOWN TAG"
+
+    existing_colors = [color for color in all_players_raw["team_color"].dropna().unique().tolist() if color]
+    known_color_series = all_players_raw.loc[unknown_mask, "team_color"].dropna()
+    known_color = known_color_series.iloc[0] if not known_color_series.empty else None
+    available_colors = [color for color in palette if color not in existing_colors]
+    assigned_color = known_color or (available_colors[0] if available_colors else palette[0])
+    all_players_raw.loc[unknown_mask, "team_color"] = all_players_raw.loc[unknown_mask, "team_color"].fillna(assigned_color)
+    all_players_raw["teampen"] = all_players_raw["teampen"].fillna(0)
+    return all_players_raw
+
+
+def refresh_table_state(server_id: str, channel_id: str, state: TableState) -> tuple[bool, str | list[str]]:
+    room_codes = _room_codes(state)
+    raw_races_dfs_update: list[pd.DataFrame] = []
+    race_room_codes: list[str] = []
+    red_flag_behavior: list[str] = []
+
+    for room_code in room_codes:
+        success, races_or_error = room_service.get_races_from_room(room_code)
+        if success is not True:
+            error_text = str(races_or_error)
+            if "couldn't find any completed races yet" in error_text:
+                return False, f"I found the room {room_code}, but I couldn't find any completed races yet. Rerun this command after the first race has finished in Room {room_code}."
+            if not state.raw_races_dfs:
+                return False, error_text
+            red_flag_behavior = [f"- Race #0: {error_text}. Couldn't get races from Limitless, so using already existing races to show table."]
+            return True, red_flag_behavior
+
+        raw_races_dfs_update.extend(races_or_error)
+        race_room_codes.extend([room_code] * len(races_or_error))
+
+    if not raw_races_dfs_update:
+        return False, "I found the room, but I couldn't find any completed races yet. Rerun this command after the first race has finished."
+
+    all_players_raw = state.all_players_raw.copy()
+    new_all_players = pd.concat(raw_races_dfs_update, ignore_index=True)[["friend_code"]].drop_duplicates()
+    new_only = new_all_players[~new_all_players["friend_code"].isin(all_players_raw["friend_code"])]
+
+    if not new_only.empty:
+        for column in all_players_raw.columns:
+            if column not in new_only.columns:
+                new_only[column] = pd.NA
+        new_only = new_only[all_players_raw.columns]
+        new_only["changed_name"] = new_only["changed_name"].fillna("—")
+        all_players_raw = pd.concat([all_players_raw, new_only], ignore_index=True)
+
+    all_players_raw = _assign_missing_team_colors(
+        all_players_raw,
+        int(state.metadata["format"].iloc[0]),
+        str(state.metadata["color_theme"].iloc[0]),
+    )
+
+    mii_map = (
+        pd.concat(raw_races_dfs_update, ignore_index=True)[["friend_code", "mii_name"]]
+        .dropna(subset=["mii_name"])
+        .drop_duplicates(subset="friend_code", keep="first")
+        .set_index("friend_code")["mii_name"]
+    )
+    all_players_raw["mii_name"] = all_players_raw["friend_code"].map(mii_map)
+    all_players_raw["mii_name"] = all_players_raw["mii_name"].fillna("Unknown")
+    all_players_raw["player_event_id"] = np.arange(1, len(all_players_raw) + 1)
+
+    points_to_off_results = _points_to_off_results(int(state.metadata["format"].iloc[0]))
+    processed_raw_races = [
+        process_race(all_players_raw, race_df, race_room_codes[index], points_to_off_results)
+        for index, race_df in enumerate(raw_races_dfs_update)
+    ]
+
+    _, processed_all_players, processed_races_dfs, _ = edit_service.process_commands(
+        state.metadata,
+        state.commands,
+        all_players_raw,
+        processed_raw_races,
+        get_points,
+    )
+
+    state.all_players_raw = all_players_raw
+    state.all_players = processed_all_players
+    state.raw_races_dfs = processed_raw_races
+    state.processed_races_dfs = processed_races_dfs
+    save_state(server_id, channel_id, state)
+
+    return True, red_flag_behavior
+
+
 def start_table(search_term: str | None, fmt: str, num_teams: int, server_id: str, channel_id: str, color_theme: str = "pastel", rxx: str | None = None) -> tuple[bool, str]:
     format_int = _parse_format(fmt)
     room_code = rxx
@@ -177,7 +280,7 @@ def merge_room(search_term: str | None, state: TableState, rxx: str | None = Non
             return False, str(_)
     existing = [state.metadata[f"room_{index}_id"].iloc[0] for index in range(1, int(state.metadata["num_rooms"].iloc[0]) + 1)]
     if room_code in existing:
-        return False, f"Room {room_code} is already on the table."
+        return False, f"I think Room {room_code} is already on the table."
     num_rooms = int(state.metadata["num_rooms"].iloc[0]) + 1
     state.metadata["num_rooms"] = num_rooms
     state.metadata[f"room_{num_rooms}_id"] = room_code
@@ -235,14 +338,48 @@ def create_table_text_df(all_players: pd.DataFrame, processed_races: list[pd.Dat
             race_points = race_df.loc[race_df["friend_code"] == fc, "points"]
             points.append(int(race_points.iloc[0]) if len(race_points) else 0)
         table_df[f"race_{index}_scores"] = points
+    if len(table_df["tag_guess"].unique().tolist()) <= 1 and len(table_df) >= 10:
+        race_cols = [col for col in table_df.columns if col.startswith("race_") and col.endswith("_scores")]
+        table_df["score_sum"] = table_df[race_cols].sum(axis=1)
+        table_df = table_df.sort_values(by="score_sum", ascending=False).drop(columns=["score_sum"])
+        table_df["player_event_id"] = np.arange(1, len(table_df) + 1)
+    else:
+        table_df = table_df.sort_values(by="tag_guess")
     return table_df
+
+
+def get_table_text_by_race(table_df: pd.DataFrame, format_int: int, color_theme: str, override_color: bool = False, for_update: bool = False) -> str:
+    race_columns = [col for col in table_df.columns if col.startswith("race_") and col.endswith("_scores")]
+    output_lines = [f"#title {len(race_columns)} races"]
+    grouped = table_df.groupby(["tag_guess", "team_color", "teampen"])
+
+    if format_int == 1 and not for_update and len(table_df) >= 10:
+        palette = FFA_COLOR_PALETTES.get(color_theme, FFA_COLOR_PALETTES["honey"])
+        for idx, (_, row) in enumerate(table_df.iterrows(), start=1):
+            color = DISTINCT_COLORS[idx - 1] if override_color else palette[min(idx - 1, len(palette) - 1)]
+            output_lines.append(f"\nFFA{idx} {color}")
+            output_lines.append(f"{row['table_name']} {'|'.join(str(row[col]) for col in race_columns)}|")
+        return "\n".join(output_lines)
+
+    for color_index, ((tag, color, pen), group) in enumerate(grouped):
+        if override_color:
+            color = DISTINCT_COLORS[color_index % len(DISTINCT_COLORS)]
+        if for_update:
+            color = ""
+        if int(pen) != 0:
+            output_lines.append(f"\n{tag} {color}\n Penalty {-abs(int(pen))}".rstrip())
+        else:
+            output_lines.append(f"\n{tag} {color}".rstrip())
+        for _, row in group.iterrows():
+            output_lines.append(f"{row['table_name']} {'|'.join(str(row[col]) for col in race_columns)}|")
+    return "\n".join(output_lines)
 
 
 def get_table_text_by_gp(table_df: pd.DataFrame, format_int: int, color_theme: str, override_color: bool = False, for_update: bool = False) -> str:
     race_columns = [col for col in table_df.columns if col.startswith("race_") and col.endswith("_scores")]
     output_lines = [f"#title {len(race_columns)} races"]
     grouped = table_df.groupby(["tag_guess", "team_color", "teampen"])
-    if format_int == 1 and len(table_df) >= 10:
+    if format_int == 1 and not for_update and len(table_df) >= 10:
         palette = FFA_COLOR_PALETTES.get(color_theme, FFA_COLOR_PALETTES["honey"])
         for idx, (_, row) in enumerate(table_df.iterrows(), start=1):
             color = DISTINCT_COLORS[idx - 1] if override_color else palette[min(idx - 1, len(palette) - 1)]
@@ -266,16 +403,27 @@ def get_table_text_by_gp(table_df: pd.DataFrame, format_int: int, color_theme: s
 
 def render_table(state: TableState, by_race: bool = False, override_color: bool = False) -> tuple[bool, object, str, list[str], list[str], str]:
     table_df = create_table_text_df(state.all_players.copy(), state.processed_races_dfs)
-    table_text = get_table_text_by_gp(table_df, int(state.metadata["format"].iloc[0]), str(state.metadata["color_theme"].iloc[0]), override_color=override_color, for_update=True)
+    format_int = int(state.metadata["format"].iloc[0])
+    color_theme = str(state.metadata["color_theme"].iloc[0])
+    if by_race:
+        table_text = get_table_text_by_race(table_df, format_int, color_theme, override_color=override_color, for_update=False)
+    else:
+        table_text = get_table_text_by_gp(table_df, format_int, color_theme, override_color=override_color, for_update=False)
     image, edit_link = get_table_image(table_text)
-    update_text = f"{len(state.processed_races_dfs)} races tracked."
+    num_races = len(state.processed_races_dfs)
+    final_track = state.processed_races_dfs[num_races - 1]["track"].iloc[0] if num_races else "Unknown"
+    update_text = f"Limitless Room updated: **{num_races}** races played.\nLast race: **{final_track}**"
     errors = get_table_errors(state)
     return True, image, update_text, errors, [], edit_link
 
 
 def get_tabletext(state: TableState, by_race: bool = False) -> str:
     table_df = create_table_text_df(state.all_players.copy(), state.processed_races_dfs)
-    return get_table_text_by_gp(table_df, int(state.metadata["format"].iloc[0]), str(state.metadata["color_theme"].iloc[0]), for_update=True)
+    format_int = int(state.metadata["format"].iloc[0])
+    color_theme = str(state.metadata["color_theme"].iloc[0])
+    if by_race:
+        return get_table_text_by_race(table_df, format_int, color_theme, for_update=True)
+    return get_table_text_by_gp(table_df, format_int, color_theme, for_update=True)
 
 
 def get_allplayers(state: TableState) -> str:
