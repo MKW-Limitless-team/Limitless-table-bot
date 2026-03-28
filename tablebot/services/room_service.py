@@ -17,6 +17,8 @@ def _coerce_lag_seconds(value: object, *, milliseconds: bool = False) -> float:
     except (TypeError, ValueError):
         return 0.0
     if milliseconds:
+        if lag_value < 0:
+            return 0.0
         lag_value /= 1000.0
     return lag_value
 
