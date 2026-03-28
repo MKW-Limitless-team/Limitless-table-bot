@@ -9,6 +9,18 @@ from tablebot.api import limitless
 from tablebot.utils.formatting import created_ago_text, format_friend_code, format_milliseconds, parse_possible_mention
 
 
+def _coerce_lag_seconds(value: object, *, milliseconds: bool = False) -> float:
+    if value in (None, "", "—"):
+        return 0.0
+    try:
+        lag_value = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if milliseconds:
+        lag_value /= 1000.0
+    return lag_value
+
+
 def pid_to_fc(pid: int, gameid: str = "RMCJ", stringform: bool = True):
     if pid == 0:
         return 0
@@ -157,8 +169,11 @@ def get_races_from_room(room_code: str) -> tuple[bool, list[pd.DataFrame] | str]
                 or (pid_to_fc(int(profile_id)) if profile_id.isdigit() else "")
             )
             finish_time_ms = player.get("FinishTimeMs", player.get("FinishTime", player.get("finish_time_ms")))
-            lag_ms = player.get("Delta", player.get("delta", 0))
-            lag_seconds = round(float(lag_ms) / 1000.0, 2) if lag_ms not in (None, "") else 0.0
+            base_lag_seconds = _coerce_lag_seconds(
+                player.get("LagStart", player.get("lag_start", player.get("Lag", player.get("lag", 0))))
+            )
+            delta_seconds = _coerce_lag_seconds(player.get("Delta", player.get("delta", 0)), milliseconds=True)
+            lag_seconds = round(base_lag_seconds + delta_seconds, 2)
             conn_fail = historical_player.get("conn_fail", room_player.get("conn_fail", "—"))
             conn_fail = str(conn_fail).strip() if conn_fail is not None else "—"
             if conn_fail == "0":
