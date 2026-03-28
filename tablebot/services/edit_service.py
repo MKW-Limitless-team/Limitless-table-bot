@@ -284,4 +284,13 @@ def process_commands(
                         processed_races_dfs[race_num - 1]["points"],
                     )
 
+    processed_all_players["mii_name"] = processed_all_players["mii_name"].fillna("Unknown")
+    processed_all_players["changed_name"] = processed_all_players["changed_name"].fillna("—")
+    processed_all_players["display_name"] = np.where(
+        (processed_all_players["changed_name"] != "—") & processed_all_players["changed_name"].notna(),
+        processed_all_players["changed_name"],
+        processed_all_players["mii_name"],
+    )
+    processed_all_players["display_name"] = processed_all_players["display_name"].fillna("Unknown")
+
     return True, processed_all_players, processed_races_dfs, error_log

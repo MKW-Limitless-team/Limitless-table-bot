@@ -202,6 +202,7 @@ def refresh_table_state(server_id: str, channel_id: str, state: TableState) -> t
                 new_only[column] = pd.NA
         new_only = new_only[all_players_raw.columns]
         new_only["changed_name"] = new_only["changed_name"].fillna("—")
+        new_only["display_name"] = new_only["display_name"].fillna(new_only["mii_name"]).fillna("Unknown")
         all_players_raw = pd.concat([all_players_raw, new_only], ignore_index=True)
 
     all_players_raw = _assign_missing_team_colors(
@@ -218,6 +219,9 @@ def refresh_table_state(server_id: str, channel_id: str, state: TableState) -> t
     )
     all_players_raw["mii_name"] = all_players_raw["friend_code"].map(mii_map)
     all_players_raw["mii_name"] = all_players_raw["mii_name"].fillna("Unknown")
+    all_players_raw["changed_name"] = all_players_raw["changed_name"].fillna("—")
+    all_players_raw["display_name"] = all_players_raw["display_name"].where(all_players_raw["display_name"].notna(), all_players_raw["mii_name"])
+    all_players_raw["display_name"] = all_players_raw["display_name"].fillna("Unknown")
     all_players_raw["player_event_id"] = np.arange(1, len(all_players_raw) + 1)
 
     points_to_off_results = _points_to_off_results(int(state.metadata["format"].iloc[0]))
@@ -465,20 +469,40 @@ def commands_text(state: TableState) -> str:
 
 
 def race_result_text(state: TableState, race_number: int = 9999, display_true_lag_start: bool = False) -> str:
+    if not state.processed_races_dfs:
+        return "No races are currently stored for this table."
+
     race_number = max(1, min(race_number, len(state.processed_races_dfs)))
     df = state.processed_races_dfs[race_number - 1].copy()
+    if df.empty:
+        return f"Race #{race_number} has no stored data."
+
+    track = str(df.iloc[0].get("track", "Unknown"))
+    match_id = str(df.iloc[0].get("match_id", "Unknown"))
     df = df[df["placement"] >= 1].sort_values("placement")
+    if df.empty:
+        return f"Race #{race_number}: {track} ({match_id})\nNo classified finishers were recorded for this race."
+
+    def _safe_text(value: object, fallback: str = "Unknown") -> str:
+        if pd.isna(value):
+            return fallback
+        text = str(value).strip()
+        return text if text else fallback
+
     df["display_name"] = df["friend_code"].apply(
-        lambda fc: state.all_players[state.all_players["friend_code"] == fc]["display_name"].iloc[0]
-        if len(state.all_players[state.all_players["friend_code"] == fc]) else "Unknown"
+        lambda fc: _safe_text(
+            state.all_players[state.all_players["friend_code"] == fc]["display_name"].iloc[0]
+            if len(state.all_players[state.all_players["friend_code"] == fc]) else "Unknown"
+        )
     )
+    df["mii_name"] = df["mii_name"].apply(_safe_text)
     if display_true_lag_start:
         df["lag_start_display"] = df["lag_start"]
     else:
         lag = df["lag_start"].abs()
         df["lag_start_display"] = np.where(lag >= 0.50, df["lag_start"], "—")
     longest_name = max(11, len(max(df["display_name"].tolist(), key=len)) + 1 if len(df) else 11)
-    header = f"Race #{race_number}: {df.iloc[0]['track']} ({df.iloc[0]['match_id']})\n\n"
+    header = f"Race #{race_number}: {track} ({match_id})\n\n"
     header += f"{'Place':<6} {'Mii Name':<11} {'Display Name':<{longest_name}} {'Finish Time':<12} {'Lag Start':<9}\n"
     header += "-" * (50 + longest_name) + "\n"
     lines = [header]

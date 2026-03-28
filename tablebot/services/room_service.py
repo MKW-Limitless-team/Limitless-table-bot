@@ -1,10 +1,27 @@
 from __future__ import annotations
 
+import hashlib
+
 import pandas as pd
 import requests
 
 from tablebot.api import limitless
 from tablebot.utils.formatting import created_ago_text, format_friend_code, format_milliseconds, parse_possible_mention
+
+
+def pid_to_fc(pid: int, gameid: str = "RMCJ", stringform: bool = True):
+    if pid == 0:
+        return 0
+
+    pid_bytes = pid.to_bytes(4, "little")
+    gameid_bytes = gameid[::-1].encode("ascii")
+    md5_hash = hashlib.md5(pid_bytes + gameid_bytes).digest()
+    csum = md5_hash[0] >> 1
+    fc = (csum << 32) | pid
+    if stringform:
+        text = f"{fc:012d}"
+        return f"{text[0:4]}-{text[4:8]}-{text[8:12]}"
+    return fc
 
 
 def find_room_by_player(rooms: list[dict], query: str) -> tuple[bool, str]:
@@ -96,6 +113,11 @@ def get_races_from_room(room_code: str) -> tuple[bool, list[pd.DataFrame] | str]
     rooms = get_rooms()
     room = next((room for room in rooms if room["room_code"] == room_code), None)
     player_map = {player["pid"]: player for player in (room["players"] if room else [])}
+    historical_players_raw = results_json.get("players", {})
+    historical_player_map: dict[str, dict] = {}
+    if isinstance(historical_players_raw, dict):
+        for profile_id, pdata in historical_players_raw.items():
+            historical_player_map[str(profile_id)] = pdata if isinstance(pdata, dict) else {}
 
     races = []
     for race_id, race_data in results_json.get("results", {}).items():
@@ -103,8 +125,14 @@ def get_races_from_room(room_code: str) -> tuple[bool, list[pd.DataFrame] | str]
         course = None
         for player in race_data:
             profile_id = str(player.get("ProfileID") or player.get("profile_id") or player.get("pid") or "")
+            historical_player = historical_player_map.get(profile_id, {})
             room_player = player_map.get(profile_id, {})
-            if not room_player and profile_id:
+            if not (
+                player.get("MiiName")
+                or player.get("mii_name")
+                or historical_player.get("name")
+                or room_player.get("mii_name")
+            ) and profile_id:
                 try:
                     pinfo = limitless.fetch_pinfo(int(profile_id))
                 except Exception:
@@ -116,6 +144,7 @@ def get_races_from_room(room_code: str) -> tuple[bool, list[pd.DataFrame] | str]
             mii_name = (
                 player.get("MiiName")
                 or player.get("mii_name")
+                or historical_player.get("name")
                 or room_player.get("mii_name")
                 or pinfo.get("User", {}).get("LastInGameSn")
                 or "Unknown"
@@ -123,17 +152,24 @@ def get_races_from_room(room_code: str) -> tuple[bool, list[pd.DataFrame] | str]
             friend_code = (
                 player.get("FriendCode")
                 or player.get("friend_code")
+                or historical_player.get("fc")
                 or room_player.get("friend_code")
-                or ""
+                or (pid_to_fc(int(profile_id)) if profile_id.isdigit() else "")
             )
             finish_time_ms = player.get("FinishTimeMs", player.get("FinishTime", player.get("finish_time_ms")))
             lag_ms = player.get("Delta", player.get("delta", 0))
             lag_seconds = round(float(lag_ms) / 1000.0, 2) if lag_ms not in (None, "") else 0.0
+            conn_fail = historical_player.get("conn_fail", room_player.get("conn_fail", "—"))
+            conn_fail = str(conn_fail).strip() if conn_fail is not None else "—"
+            if conn_fail == "0":
+                conn_fail = "—"
+            elif conn_fail not in {"", "—"} and "." not in conn_fail:
+                conn_fail = f"{conn_fail}.00"
             current.append(
                 {
                     "friend_code": format_friend_code(friend_code),
                     "lag_start": lag_seconds,
-                    "conn_fail": room_player.get("conn_fail", "—"),
+                    "conn_fail": conn_fail or "—",
                     "finish_time": format_milliseconds(finish_time_ms),
                     "mii_name": mii_name,
                     "track": str(course or "Unknown"),
