@@ -71,10 +71,13 @@ def build_new_race_df(
     room_size = len(ordered["friend_code"].unique().tolist())
     if "profile_id" not in ordered.columns:
         ordered["profile_id"] = ""
+    if "mii_data" not in ordered.columns:
+        ordered["mii_data"] = ""
 
     race_df = pd.DataFrame(
         {
             "profile_id": ordered["profile_id"],
+            "mii_data": ordered["mii_data"],
             "friend_code": ordered["friend_code"],
             "lag_start": 0,
             "conn_fail": "—",
@@ -101,7 +104,9 @@ def build_new_race_df(
     off_results["points"] = points_to_off_results_players
     if "profile_id" not in off_results.columns:
         off_results["profile_id"] = ""
-    off_results = off_results[["profile_id", "friend_code", "lag_start", "conn_fail", "finish_time", "mii_name", "track", "match_id", "room_id", "placement", "dc_status", "points"]]
+    if "mii_data" not in off_results.columns:
+        off_results["mii_data"] = ""
+    off_results = off_results[["profile_id", "mii_data", "friend_code", "lag_start", "conn_fail", "finish_time", "mii_name", "track", "match_id", "room_id", "placement", "dc_status", "points"]]
 
     return pd.concat([race_df, off_results], ignore_index=True)
 

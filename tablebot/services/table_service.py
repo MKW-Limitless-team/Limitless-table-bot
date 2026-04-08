@@ -22,7 +22,21 @@ def _ensure_profile_id_column(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _ensure_mii_data_column(df: pd.DataFrame) -> pd.DataFrame:
+    if "mii_data" not in df.columns:
+        df = df.copy()
+        df["mii_data"] = ""
+    return df
+
+
 def _stringify_profile_id(value: object) -> str:
+    if pd.isna(value):
+        return ""
+    text = str(value).strip()
+    return "" if text.lower() == "nan" else text
+
+
+def _stringify_mii_data(value: object) -> str:
     if pd.isna(value):
         return ""
     text = str(value).strip()
@@ -58,7 +72,9 @@ def identify_custom_track(track_name: str) -> str:
 
 def process_race(all_players: pd.DataFrame, race_df: pd.DataFrame, room_code: str, points_to_off_results_players: int = 0) -> pd.DataFrame:
     all_players = _ensure_profile_id_column(all_players)
+    all_players = _ensure_mii_data_column(all_players)
     race_df = _ensure_profile_id_column(race_df)
+    race_df = _ensure_mii_data_column(race_df)
     race_df = race_df.copy()
     race_df["room_id"] = room_code
     track = identify_custom_track(str(race_df["track"].iloc[0]))
@@ -84,7 +100,7 @@ def process_race(all_players: pd.DataFrame, race_df: pd.DataFrame, room_code: st
     off_results["placement"] = -1
     off_results["dc_status"] = "before"
     off_results["points"] = points_to_off_results_players
-    off_results = off_results[["profile_id", "friend_code", "lag_start", "conn_fail", "finish_time", "mii_name", "track", "match_id", "room_id", "placement", "dc_status", "points"]]
+    off_results = off_results[["profile_id", "mii_data", "friend_code", "lag_start", "conn_fail", "finish_time", "mii_name", "track", "match_id", "room_id", "placement", "dc_status", "points"]]
     return pd.concat([race_df, off_results], ignore_index=True)
 
 
@@ -133,8 +149,8 @@ def _parse_format(fmt: str) -> int:
 
 
 def _create_all_players(races_dfs: list[pd.DataFrame], fmt: int, num_teams: int, color_theme: str) -> pd.DataFrame:
-    races_with_profile = [_ensure_profile_id_column(race_df) for race_df in races_dfs]
-    all_players = pd.concat(races_with_profile, ignore_index=True)[["profile_id", "friend_code", "mii_name"]].drop_duplicates(subset="friend_code", keep="last")
+    races_with_profile = [_ensure_mii_data_column(_ensure_profile_id_column(race_df)) for race_df in races_dfs]
+    all_players = pd.concat(races_with_profile, ignore_index=True)[["profile_id", "mii_data", "friend_code", "mii_name"]].drop_duplicates(subset="friend_code", keep="last")
     success, tagged = guess_tags_from_players(races_dfs[0][["friend_code", "mii_name"]].copy(), fmt, num_teams)
     if success is not True:
         raise ValueError(str(tagged))
@@ -211,7 +227,7 @@ def refresh_table_state(server_id: str, channel_id: str, state: TableState) -> t
     if not raw_races_dfs_update:
         return False, "I found the room, but I couldn't find any completed races yet. Rerun this command after the first race has finished."
 
-    all_players_raw = _ensure_profile_id_column(state.all_players_raw.copy())
+    all_players_raw = _ensure_mii_data_column(_ensure_profile_id_column(state.all_players_raw.copy()))
     new_all_players = pd.concat(raw_races_dfs_update, ignore_index=True)[["friend_code"]].drop_duplicates()
     new_only = new_all_players[~new_all_players["friend_code"].isin(all_players_raw["friend_code"])]
 
@@ -245,6 +261,13 @@ def refresh_table_state(server_id: str, channel_id: str, state: TableState) -> t
         .set_index("friend_code")["profile_id"]
     )
     all_players_raw["profile_id"] = all_players_raw["friend_code"].map(profile_map).fillna(all_players_raw["profile_id"]).fillna("")
+    mii_data_map = (
+        pd.concat([_ensure_mii_data_column(race_df) for race_df in raw_races_dfs_update], ignore_index=True)[["friend_code", "mii_data"]]
+        .dropna(subset=["friend_code"])
+        .drop_duplicates(subset="friend_code", keep="first")
+        .set_index("friend_code")["mii_data"]
+    )
+    all_players_raw["mii_data"] = all_players_raw["friend_code"].map(mii_data_map).fillna(all_players_raw["mii_data"]).fillna("")
     all_players_raw["changed_name"] = all_players_raw["changed_name"].fillna("—")
     all_players_raw["display_name"] = all_players_raw["display_name"].where(all_players_raw["display_name"].notna(), all_players_raw["mii_name"])
     all_players_raw["display_name"] = all_players_raw["display_name"].fillna("Unknown")
@@ -323,10 +346,10 @@ def merge_room(search_term: str | None, state: TableState, rxx: str | None = Non
 
 def load_table_state(server_id: str, channel_id: str) -> TableState:
     state = load_state(server_id, channel_id)
-    state.all_players_raw = _ensure_profile_id_column(state.all_players_raw)
-    state.all_players = _ensure_profile_id_column(state.all_players)
-    state.raw_races_dfs = [_ensure_profile_id_column(race_df) for race_df in state.raw_races_dfs]
-    state.processed_races_dfs = [_ensure_profile_id_column(race_df) for race_df in state.processed_races_dfs]
+    state.all_players_raw = _ensure_mii_data_column(_ensure_profile_id_column(state.all_players_raw))
+    state.all_players = _ensure_mii_data_column(_ensure_profile_id_column(state.all_players))
+    state.raw_races_dfs = [_ensure_mii_data_column(_ensure_profile_id_column(race_df)) for race_df in state.raw_races_dfs]
+    state.processed_races_dfs = [_ensure_mii_data_column(_ensure_profile_id_column(race_df)) for race_df in state.processed_races_dfs]
     return state
 
 
@@ -388,12 +411,12 @@ def create_table_text_df(all_players: pd.DataFrame, processed_races: list[pd.Dat
 
 
 def build_export_payload(state: TableState, export_date: datetime | None = None) -> dict[str, object]:
-    table_df = create_table_text_df(_ensure_profile_id_column(state.all_players.copy()), state.processed_races_dfs)
+    state_players = _ensure_mii_data_column(_ensure_profile_id_column(state.all_players))
+    table_df = create_table_text_df(state_players.copy(), state.processed_races_dfs)
     race_columns = [col for col in table_df.columns if col.startswith("race_") and col.endswith("_scores")]
     table_df["score"] = table_df[race_columns].sum(axis=1) if race_columns else 0
-    table_df["profile_id"] = table_df["player_event_id"].map(
-        _ensure_profile_id_column(state.all_players).set_index("player_event_id")["profile_id"]
-    ).fillna("")
+    table_df["profile_id"] = table_df["player_event_id"].map(state_players.set_index("player_event_id")["profile_id"]).fillna("")
+    table_df["mii_data"] = table_df["player_event_id"].map(state_players.set_index("player_event_id")["mii_data"]).fillna("")
 
     team_totals = (
         table_df.groupby("tag_guess", dropna=False)
@@ -420,7 +443,7 @@ def build_export_payload(state: TableState, export_date: datetime | None = None)
         {
             "name": str(row["table_name"]),
             "score": int(row["score"]),
-            "mii_data": "",
+            "mii_data": _stringify_mii_data(row["mii_data"]),
             "profile_id": _stringify_profile_id(row["profile_id"]),
         }
         for _, row in export_players.iterrows()

@@ -185,6 +185,14 @@ def get_races_from_room(room_code: str) -> tuple[bool, list[pd.DataFrame] | str]
             current.append(
                 {
                     "profile_id": profile_id,
+                    "mii_data": str(
+                        player.get("MiiData")
+                        or player.get("mii_data")
+                        or historical_player.get("mii_data")
+                        or historical_player.get("MiiData")
+                        or pinfo.get("User", {}).get("MiiData")
+                        or ""
+                    ),
                     "friend_code": format_friend_code(friend_code),
                     "lag_start": lag_seconds,
                     "conn_fail": conn_fail or "—",
