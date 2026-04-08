@@ -184,6 +184,7 @@ def get_races_from_room(room_code: str) -> tuple[bool, list[pd.DataFrame] | str]
                 conn_fail = f"{conn_fail}.00"
             current.append(
                 {
+                    "profile_id": profile_id,
                     "friend_code": format_friend_code(friend_code),
                     "lag_start": lag_seconds,
                     "conn_fail": conn_fail or "—",
