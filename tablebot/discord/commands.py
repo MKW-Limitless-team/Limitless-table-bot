@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from io import BytesIO
 from typing import Literal
 
 import discord
@@ -166,6 +167,18 @@ def register_commands(bot: discord.Client, tree: app_commands.CommandTree) -> No
     async def help_cmd(interaction: discord.Interaction, command: str | None = None):
         await interaction.response.defer()
         await interaction.edit_original_response(content=HELP_MAP.get(command or "", HELP_MESSAGE))
+
+    @tree.command(name="export", description="Export the current table as JSON")
+    async def export(interaction: discord.Interaction):
+        await interaction.response.defer()
+        state = _require_state(str(interaction.guild.id), str(interaction.channel.id))
+        export_json = table_service.build_export_json(state)
+        buffer = BytesIO(export_json.encode("utf-8"))
+        buffer.seek(0)
+        await interaction.edit_original_response(
+            content="Exported current table JSON.",
+            attachments=[discord.File(buffer, filename="table_export.json")],
+        )
 
     def _register_simple_toggle_command(name: str, description: str, undo_value: bool):
         @tree.command(name=name, description=description)
