@@ -68,10 +68,14 @@ def get_rooms() -> list[dict]:
         for _, pdata in room.get("players", {}).items():
             discord_id = ""
             pid = str(pdata.get("pid", ""))
+            mii_entries = pdata.get("mii", [])
+            primary_mii = mii_entries[0] if isinstance(mii_entries, list) and mii_entries else {}
+            if not isinstance(primary_mii, dict):
+                primary_mii = {}
             if pid:
                 try:
                     pinfo = limitless.fetch_pinfo(int(pid))
-                    discord_id = str(pinfo.get("User", {}).get("DiscordID", "") or "")
+                    discord_id = str(pinfo.get("player", {}).get("discord_id", "") or "")
                 except Exception:
                     discord_id = ""
             conn_fail = str(pdata.get("conn_fail", "—"))
@@ -86,7 +90,8 @@ def get_rooms() -> list[dict]:
                     "role": str(role_counter),
                     "conn_fail": conn_fail,
                     "region": str(room.get("rk", "?")),
-                    "mii_name": str(pdata.get("name", "")).strip() or "Unknown",
+                    "mii_name": str(pdata.get("name", "") or primary_mii.get("name", "")).strip() or "Unknown",
+                    "mii_data": str(primary_mii.get("data", "") or ""),
                     "vr": str(pdata.get("ev", "")).strip(),
                     "discord_id": discord_id,
                 }
@@ -160,7 +165,7 @@ def get_races_from_room(room_code: str) -> tuple[bool, list[pd.DataFrame] | str]
                 or player.get("mii_name")
                 or historical_player.get("name")
                 or room_player.get("mii_name")
-                or pinfo.get("User", {}).get("LastInGameSn")
+                or pinfo.get("player", {}).get("mii_name")
                 or "Unknown"
             )
             friend_code = (
@@ -190,7 +195,8 @@ def get_races_from_room(room_code: str) -> tuple[bool, list[pd.DataFrame] | str]
                         or player.get("mii_data")
                         or historical_player.get("mii_data")
                         or historical_player.get("MiiData")
-                        or pinfo.get("User", {}).get("MiiData")
+                        or room_player.get("mii_data")
+                        or pinfo.get("player", {}).get("mii_data")
                         or ""
                     ),
                     "friend_code": format_friend_code(friend_code),
