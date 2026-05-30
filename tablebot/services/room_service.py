@@ -67,6 +67,7 @@ def get_rooms() -> list[dict]:
         role_counter = 1
         for _, pdata in room.get("players", {}).items():
             discord_id = ""
+            mii_data = ""
             pid = str(pdata.get("pid", ""))
             mii_entries = pdata.get("mii", [])
             primary_mii = mii_entries[0] if isinstance(mii_entries, list) and mii_entries else {}
@@ -75,9 +76,12 @@ def get_rooms() -> list[dict]:
             if pid:
                 try:
                     pinfo = limitless.fetch_pinfo(int(pid))
-                    discord_id = str(pinfo.get("player", {}).get("discord_id", "") or "")
+                    pinfo_player = pinfo.get("player", {})
+                    discord_id = str(pinfo_player.get("discord_id", "") or "")
+                    mii_data = str(pinfo_player.get("mii_data", "") or "")
                 except Exception:
                     discord_id = ""
+                    mii_data = ""
             conn_fail = str(pdata.get("conn_fail", "—"))
             if conn_fail == "0":
                 conn_fail = "—"
@@ -91,7 +95,7 @@ def get_rooms() -> list[dict]:
                     "conn_fail": conn_fail,
                     "region": str(room.get("rk", "?")),
                     "mii_name": str(pdata.get("name", "") or primary_mii.get("name", "")).strip() or "Unknown",
-                    "mii_data": str(primary_mii.get("data", "") or ""),
+                    "mii_data": mii_data,
                     "vr": str(pdata.get("ev", "")).strip(),
                     "discord_id": discord_id,
                 }
@@ -146,12 +150,7 @@ def get_races_from_room(room_code: str) -> tuple[bool, list[pd.DataFrame] | str]
             profile_id = str(player.get("ProfileID") or player.get("profile_id") or player.get("pid") or "")
             historical_player = historical_player_map.get(profile_id, {})
             room_player = player_map.get(profile_id, {})
-            if not (
-                player.get("MiiName")
-                or player.get("mii_name")
-                or historical_player.get("name")
-                or room_player.get("mii_name")
-            ) and profile_id:
+            if profile_id:
                 try:
                     pinfo = limitless.fetch_pinfo(int(profile_id))
                 except Exception:
@@ -190,15 +189,7 @@ def get_races_from_room(room_code: str) -> tuple[bool, list[pd.DataFrame] | str]
             current.append(
                 {
                     "profile_id": profile_id,
-                    "mii_data": str(
-                        player.get("MiiData")
-                        or player.get("mii_data")
-                        or historical_player.get("mii_data")
-                        or historical_player.get("MiiData")
-                        or room_player.get("mii_data")
-                        or pinfo.get("player", {}).get("mii_data")
-                        or ""
-                    ),
+                    "mii_data": str(pinfo.get("player", {}).get("mii_data", "") or ""),
                     "friend_code": format_friend_code(friend_code),
                     "lag_start": lag_seconds,
                     "conn_fail": conn_fail or "—",
