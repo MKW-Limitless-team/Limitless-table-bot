@@ -415,8 +415,13 @@ def build_export_payload(state: TableState, export_date: datetime | None = None)
     table_df = create_table_text_df(state_players.copy(), state.processed_races_dfs)
     race_columns = [col for col in table_df.columns if col.startswith("race_") and col.endswith("_scores")]
     table_df["score"] = table_df[race_columns].sum(axis=1) if race_columns else 0
-    table_df["profile_id"] = table_df["player_event_id"].map(state_players.set_index("player_event_id")["profile_id"]).fillna("")
-    table_df["mii_data"] = table_df["player_event_id"].map(state_players.set_index("player_event_id")["mii_data"]).fillna("")
+    player_metadata = (
+        state_players.dropna(subset=["friend_code"])
+        .drop_duplicates(subset="friend_code", keep="last")
+        .set_index("friend_code")
+    )
+    table_df["profile_id"] = table_df["friend_code"].map(player_metadata["profile_id"]).fillna("")
+    table_df["mii_data"] = table_df["friend_code"].map(player_metadata["mii_data"]).fillna("")
 
     team_totals = (
         table_df.groupby("tag_guess", dropna=False)
